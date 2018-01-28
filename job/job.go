@@ -2,10 +2,10 @@ package job
 
 import (
 	"fmt"
-	"pool/result"
-	"pool/rorre"
 	"time"
 
+	"github.com/fmarmol/usine/result"
+	"github.com/fmarmol/usine/rorre"
 	"github.com/google/uuid"
 )
 

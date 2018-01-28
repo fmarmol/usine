@@ -2,9 +2,10 @@ package pool
 
 import (
 	"log"
-	"pool/status"
 	"testing"
 	"time"
+
+	"github.com/fmarmol/usine/status"
 )
 
 func TestPool(t *testing.T) {

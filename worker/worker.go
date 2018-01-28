@@ -3,12 +3,12 @@ package worker
 import (
 	"fmt"
 	"log"
-	"pool/job"
-	"pool/result"
-	"pool/rorre"
-	"pool/status"
 	"time"
 
+	"github.com/fmarmol/usine/job"
+	"github.com/fmarmol/usine/result"
+	"github.com/fmarmol/usine/rorre"
+	"github.com/fmarmol/usine/status"
 	"github.com/google/uuid"
 )
 

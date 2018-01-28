@@ -2,9 +2,7 @@ package pool
 
 import (
 	"io"
-	"log"
 	"sync"
-	"time"
 
 	"github.com/fmarmol/usine/job"
 	"github.com/fmarmol/usine/result"
@@ -12,6 +10,7 @@ import (
 	"github.com/fmarmol/usine/status"
 	"github.com/fmarmol/usine/worker"
 	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
 )
 
 type ConfigPool struct {
@@ -67,21 +66,12 @@ func NewPool(min, max int) *Pool {
 }
 
 func (p *Pool) NewWorker() *worker.Worker {
-	w := &worker.Worker{
-		ChanPoolToWorker: make(chan status.OrderPoolToWorker),
-		ChanWorkerToPool: make(chan status.OrderWorkerToPoll),
-		ChanStatus:       make(chan worker.WorkerStatus),
-		RegisterWorker:   p.RegisterWorker,
-		Jobs:             p.Jobs,
-		Results:          p.Results,
-		Errors:           p.Errors,
-		Ticker:           time.NewTicker(time.Second),
-	}
-	w.ID = uuid.New()
-	w.Status = status.PENDING
-	w.MaxIdleTime = 5 * time.Second
-	//p.Workers = append(p.Workers, w)
-	return w
+	return worker.NewWorker(
+		p.RegisterWorker,
+		p.Jobs,
+		p.Results,
+		p.Errors,
+	)
 }
 
 func (p *Pool) Init() {
@@ -96,13 +86,14 @@ func (p *Pool) Run() {
 		for {
 			select {
 			case w := <-p.RegisterWorker:
-				log.Printf("pool received a request for registration of worker ID:%v \n", w.ID)
+				log.WithFields(log.Fields{
+					"worker": w,
+				}).Info("registration")
 				go func(worker *worker.Worker) {
 					mux.Lock()
 					p.Workers[w.ID] = w
 					mux.Unlock()
-					log.Printf("Worker ID: %v is now registered\n", worker.ID)
-					defer log.Printf("Worker Id: %v is not yet in the pool\n", worker.ID)
+					defer log.WithFields(log.Fields{"worker": w}).Warn("quit the pool")
 				LOOP:
 					for {
 						select {

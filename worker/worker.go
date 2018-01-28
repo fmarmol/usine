@@ -2,7 +2,6 @@ package worker
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/fmarmol/usine/job"
@@ -10,6 +9,7 @@ import (
 	"github.com/fmarmol/usine/rorre"
 	"github.com/fmarmol/usine/status"
 	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
 )
 
 // WorkerStatus struct
@@ -39,11 +39,27 @@ type Worker struct {
 	WorkerStatus
 }
 
-func NewWorker() *Worker {
+func (w *Worker) String() string {
+	return fmt.Sprintf("Worker> ID:%v, IdleTime:%v, MaxIdleTime:%v, ActiveTime:%v, Status:%v", w.ID, w.WorkerStatus.IdleTime, w.WorkerStatus.MaxIdleTime, w.WorkerStatus.ActiveTime, w.WorkerStatus.Status)
+}
+
+func NewWorker(r chan *Worker, j chan *job.Job, re chan result.Result, e chan rorre.Error) *Worker {
 	id := uuid.New()
 	return &Worker{
-		ID:           id,
-		WorkerStatus: WorkerStatus{ID: id},
+		ID:               id,
+		ChanPoolToWorker: make(chan status.OrderPoolToWorker),
+		ChanWorkerToPool: make(chan status.OrderWorkerToPoll),
+		ChanStatus:       make(chan WorkerStatus),
+		RegisterWorker:   r,
+		Jobs:             j,
+		Results:          re,
+		Errors:           e,
+		Ticker:           time.NewTicker(time.Second),
+		WorkerStatus: WorkerStatus{
+			ID:          id,
+			Status:      status.PENDING,
+			MaxIdleTime: 5 * time.Second,
+		},
 	}
 
 }
@@ -54,7 +70,7 @@ func (w *Worker) Register(ch chan *Worker) {
 }
 
 func (w *Worker) Run() {
-	log.Printf("Worker ID: %v started\n", w.ID)
+	log.WithFields(log.Fields{"worker": w}).Info("start")
 	w.Register(w.RegisterWorker)
 LOOP:
 	for {
@@ -62,7 +78,7 @@ LOOP:
 		case order := <-w.ChanPoolToWorker:
 			if order == status.PW_STOP && w.Status == status.PENDING {
 				w.Status = status.STOPPED
-				log.Printf("worker ID: %v is now stopped, status:%v\n", w.ID, w.Status)
+				log.WithFields(log.Fields{"worker": w}).Warn("stop")
 				w.ChanWorkerToPool <- status.WP_CONFIRM
 				close(w.ChanPoolToWorker)
 				close(w.ChanWorkerToPool)
@@ -76,10 +92,10 @@ LOOP:
 		case <-w.Ticker.C:
 			w.IdleTime += time.Second
 			if w.IdleTime > w.MaxIdleTime {
-				log.Printf("idletime reached workerID: %v ask to STOP\n", w.ID)
+				log.WithFields(log.Fields{"worker": w}).Warn("stop idletime > maxidletime")
 				w.ChanWorkerToPool <- status.WP_STOP
 			} else {
-				log.Printf("Worker> Id: %v ticked, IdleTime: %v\n", w.ID, w.IdleTime)
+				log.WithFields(log.Fields{"worker": w}).Warn("tick")
 			}
 		case job := <-w.Jobs:
 			w.Status = status.RUNNING

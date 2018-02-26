@@ -36,3 +36,10 @@ func (j *Job) Run(results chan<- result.Result, errors chan<- rorre.Error) {
 		results <- result.Result{ID: j.ID, Duration: time.Since(t), Value: value}
 	}
 }
+
+func NewAdd(a, b int) function {
+	return func() (interface{}, error) {
+		time.Sleep(time.Second)
+		return a + b, nil
+	}
+}

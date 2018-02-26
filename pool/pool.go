@@ -1,8 +1,8 @@
 package pool
 
 import (
-	"io"
 	"sync"
+	"time"
 
 	"github.com/fmarmol/usine/job"
 	"github.com/fmarmol/usine/result"
@@ -25,15 +25,26 @@ type ConfigPool struct {
 
 // JobManager struct
 type JobManager struct {
-	Reader io.Reader
-	Jobs   chan *job.Job
+	Jobs chan *job.Job
+}
+
+func (jm *JobManager) Run(p *Pool) {
+	go func() {
+		for j := range jm.Jobs {
+			p.Jobs <- j
+		}
+	}()
+	for i := 0; i < 30; i++ {
+		log.Println("send job")
+		jm.Jobs <- job.NewJob(job.NewAdd(3, 4), "add 3 and 4")
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // NewJobManager creates a new Job Manager
-func NewJobManager(r io.Reader) *JobManager {
+func NewJobManager() *JobManager {
 	return &JobManager{
-		Reader: r,
-		Jobs:   make(chan *job.Job),
+		Jobs: make(chan *job.Job),
 	}
 }
 
@@ -47,6 +58,7 @@ type Pool struct {
 	RegisterWorker chan *worker.Worker
 	ChanCli        chan status.OrderPoolToWorker
 	Close          chan struct{}
+	sync.RWMutex
 }
 
 // New Pool of workers
@@ -81,7 +93,6 @@ func (p *Pool) Init() {
 }
 
 func (p *Pool) Run() {
-	mux := sync.RWMutex{}
 	go func() {
 		for {
 			select {
@@ -90,9 +101,9 @@ func (p *Pool) Run() {
 					"worker": w,
 				}).Info("registration")
 				go func(worker *worker.Worker) {
-					mux.Lock()
+					p.Lock()
 					p.Workers[w.ID] = w
-					mux.Unlock()
+					p.Unlock()
 					defer log.WithFields(log.Fields{"worker": w}).Warn("quit the pool")
 				LOOP:
 					for {
@@ -112,13 +123,37 @@ func (p *Pool) Run() {
 				}(w)
 			case order := <-p.ChanCli:
 				if order == status.PW_STATUS {
-					log.Println("pool recieved status request")
 					for _, worker := range p.Workers {
-						log.Println("send status to", worker.ID)
 						worker.ChanPoolToWorker <- status.PW_STATUS
 					}
 				}
+
+			case result := <-p.Results:
+				log.WithFields(log.Fields{"result": result}).Info("RESULT")
+			case err := <-p.Errors:
+				log.WithFields(log.Fields{"error": err}).Info("ERROR")
 			}
+		}
+	}()
+
+	go func() {
+		for {
+			p.Lock()
+			count_running := 0
+			count_pending := 0
+			count_stopped := 0
+			for _, worker := range p.Workers {
+				switch worker.Status {
+				case status.PENDING:
+					count_pending += 1
+				case status.RUNNING:
+					count_running += 1
+				case status.STOPPED:
+					count_stopped += 1
+				}
+			}
+			p.Unlock()
+			time.Sleep(time.Second)
 		}
 	}()
 	<-p.Close

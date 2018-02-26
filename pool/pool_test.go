@@ -1,11 +1,8 @@
 package pool
 
 import (
-	"log"
+	"sync"
 	"testing"
-	"time"
-
-	"github.com/fmarmol/usine/status"
 )
 
 func TestPool(t *testing.T) {
@@ -13,13 +10,15 @@ func TestPool(t *testing.T) {
 	if p == nil {
 		t.Error("could not init pool")
 	}
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
 	p.Init()
 	go func() {
 		p.Run()
+		wg.Done()
 	}()
-	time.Sleep(time.Second)
-	log.Println("Send status")
-	p.ChanCli <- status.PW_STATUS
-	log.Println("Send status end")
-	time.Sleep(10 * time.Second)
+	jm := NewJobManager()
+	jm.Run(p)
+	wg.Wait()
 }

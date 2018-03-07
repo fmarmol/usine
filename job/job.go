@@ -9,13 +9,16 @@ import (
 	"github.com/google/uuid"
 )
 
-type function = func() (interface{}, error)
+type function = func(args ...interface{}) (interface{}, error)
 
 // Job struct
 type Job struct {
-	Name string    // Name of the job
-	ID   uuid.UUID // ID of the job
-	F    function  // function that produces an interface and an error
+	Name    string               // Name of the job
+	ID      uuid.UUID            // ID of the job
+	F       function             // function that produces an interface and an error
+	Results chan<- result.Result // chan of results
+	Errors  chan<- rorre.Error   // chan of errors
+	Args    []interface{}        //arguments
 }
 
 func (j Job) String() string {
@@ -23,23 +26,24 @@ func (j Job) String() string {
 }
 
 // NewJob creates a new job
-func NewJob(f function, name string) *Job {
-	return &Job{F: f, ID: uuid.New(), Name: name}
+func NewJob(f function, name string, r chan<- result.Result, e chan<- rorre.Error, args ...interface{}) *Job {
+	return &Job{F: f, ID: uuid.New(), Name: name, Results: r, Errors: e, Args: args}
 }
 
 // Run runs the job
-func (j *Job) Run(results chan<- result.Result, errors chan<- rorre.Error) {
+func (j *Job) Run() {
 	t := time.Now()
-	if value, err := j.F(); err != nil {
-		errors <- rorre.Error{ID: j.ID, Err: err}
+	if value, err := j.F(j.Args...); err != nil {
+		j.Errors <- rorre.Error{ID: j.ID, Err: err}
 	} else {
-		results <- result.Result{ID: j.ID, Duration: time.Since(t), Value: value}
+		j.Results <- result.Result{ID: j.ID, Duration: time.Since(t), Value: value}
 	}
 }
 
-func NewAdd(a, b int) function {
-	return func() (interface{}, error) {
-		time.Sleep(time.Second)
-		return a + b, nil
+func Add(ints ...interface{}) (interface{}, error) {
+	time.Sleep(3 * time.Second)
+	if len(ints) == 2 {
+		return ints[0].(int) + ints[1].(int), nil
 	}
+	return nil, fmt.Errorf("add function should take only 2 arguments")
 }

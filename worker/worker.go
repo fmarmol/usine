@@ -36,6 +36,7 @@ type Worker struct {
 	Results          chan result.Result
 	Errors           chan rorre.Error
 	Ticker           *time.Ticker
+	Close            chan struct{}
 	WorkerStatus
 }
 
@@ -72,36 +73,53 @@ func (w *Worker) Register(ch chan *Worker) {
 func (w *Worker) Run() {
 	log.WithFields(log.Fields{"worker": w}).Info("start")
 	w.Register(w.RegisterWorker)
-LOOP:
-	for {
-		select {
-		case order := <-w.ChanPoolToWorker:
+
+	// ORDER LOOP
+	go func() {
+		for order := range w.ChanPoolToWorker {
 			if order == status.PW_STOP && w.Status == status.PENDING {
 				w.Status = status.STOPPED
 				log.WithFields(log.Fields{"worker": w}).Warn("stop")
 				w.ChanWorkerToPool <- status.WP_CONFIRM
 				close(w.ChanPoolToWorker)
 				close(w.ChanWorkerToPool)
-				break LOOP
-			}
-			if order == status.PW_STATUS {
+				w.Ticker.Stop()
+				w.Close <- struct{}{}
+
+			} else if order == status.PW_STATUS {
 				log.Printf("worker ID:%v recieved request of status from pool\n", w.ID)
 				w.ChanStatus <- w.WorkerStatus
 				log.Printf("worker ID:%v send status to pool\n", w.ID)
 			}
-		case <-w.Ticker.C:
-			w.IdleTime += time.Second
+		}
+	}()
+
+	// JOB LOOP
+	go func() {
+		for job := range w.Jobs {
+			log.Println("RECIEVED JOB")
+			w.Status = status.RUNNING
+			w.IdleTime = 0
+			job.Run()
+			w.Status = status.PENDING
+		}
+	}()
+
+	// TICKER LOOP
+	go func() {
+		for _ = range w.Ticker.C {
+			if w.Status == status.PENDING {
+				w.IdleTime += time.Second
+			}
 			if w.IdleTime > w.MaxIdleTime {
 				log.WithFields(log.Fields{"worker": w}).Warn("stop idletime > maxidletime")
 				w.ChanWorkerToPool <- status.WP_STOP
 			} else {
 				log.WithFields(log.Fields{"worker": w}).Warn("tick")
 			}
-		case job := <-w.Jobs:
-			w.Status = status.RUNNING
-			w.IdleTime = 0
-			job.Run(w.Results, w.Errors)
-			w.Status = status.PENDING
 		}
-	}
+	}()
+
+	log.Println("END OF WORKER")
+
 }

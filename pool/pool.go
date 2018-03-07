@@ -36,7 +36,7 @@ func (jm *JobManager) Run(p *Pool) {
 	}()
 	for i := 0; i < 30; i++ {
 		log.Println("send job")
-		jm.Jobs <- job.NewJob(job.NewAdd(3, 4), "add 3 and 4")
+		jm.Jobs <- job.NewJob(job.Add, "add 3 and 4", p.Results, p.Errors, 3, 4)
 		time.Sleep(100 * time.Millisecond)
 	}
 }

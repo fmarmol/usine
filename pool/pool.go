@@ -53,23 +53,23 @@ type Pool struct {
 	Workers        map[uuid.UUID]*worker.Worker
 	Min, Max       int
 	Jobs           chan *job.Job
-	Results        chan result.Result
-	Errors         chan rorre.Error
+	Results        chan *result.Result
+	Errors         chan *rorre.Error
 	RegisterWorker chan *worker.Worker
 	ChanCli        chan status.OrderPoolToWorker
 	Close          chan struct{}
 	sync.RWMutex
 }
 
-// New Pool of workers
+// NewPool of workers
 func NewPool(min, max int) *Pool {
 	p := &Pool{
 		Workers:        map[uuid.UUID]*worker.Worker{},
 		Min:            min,
 		Max:            max,
 		Jobs:           make(chan *job.Job),
-		Results:        make(chan result.Result),
-		Errors:         make(chan rorre.Error),
+		Results:        make(chan *result.Result),
+		Errors:         make(chan *rorre.Error),
 		Close:          make(chan struct{}),
 		RegisterWorker: make(chan *worker.Worker),
 		ChanCli:        make(chan status.OrderPoolToWorker),
@@ -83,6 +83,7 @@ func (p *Pool) NewWorker() *worker.Worker {
 		p.Jobs,
 		p.Results,
 		p.Errors,
+		time.Second,
 	)
 }
 
@@ -116,15 +117,15 @@ func (p *Pool) Run() {
 								<-worker.ChanWorkerToPool
 								break LOOP
 							}
-						case status := <-worker.ChanStatus:
-							log.Printf("%+v\n", status)
+						case info := <-worker.ChanInfo:
+							log.Printf("%+v\n", info)
 						}
 					}
 				}(w)
 			case order := <-p.ChanCli:
-				if order == status.PW_STATUS {
+				if order == status.PW_INFO {
 					for _, worker := range p.Workers {
-						worker.ChanPoolToWorker <- status.PW_STATUS
+						worker.ChanPoolToWorker <- status.PW_INFO
 					}
 				}
 

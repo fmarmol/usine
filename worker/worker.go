@@ -2,18 +2,21 @@ package worker
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/fmarmol/usine/job"
+	"github.com/fmarmol/usine/logger"
 	"github.com/fmarmol/usine/result"
 	"github.com/fmarmol/usine/rorre"
 	"github.com/fmarmol/usine/status"
 	"github.com/google/uuid"
-	log "github.com/sirupsen/logrus"
 )
 
-// WorkerStatus struct
-type WorkerStatus struct {
+var log = logger.NewLogger()
+
+// Info struct
+type Info struct {
 	ID          uuid.UUID
 	IdleTime    time.Duration
 	MaxIdleTime time.Duration
@@ -21,7 +24,7 @@ type WorkerStatus struct {
 	Status      status.Status
 }
 
-func (ws WorkerStatus) String() string {
+func (ws Info) String() string {
 	return fmt.Sprintf("WorkerStatus> ID:%v, IdleTime:%v, MaxIdleTime:%v, ActiveTime:%v, Status:%v", ws.ID, ws.IdleTime, ws.MaxIdleTime, ws.ActiveTime, ws.Status)
 }
 
@@ -29,34 +32,42 @@ func (ws WorkerStatus) String() string {
 type Worker struct {
 	ID               uuid.UUID
 	ChanPoolToWorker chan status.OrderPoolToWorker
-	ChanWorkerToPool chan status.OrderWorkerToPoll
-	ChanStatus       chan WorkerStatus
+	ChanWorkerToPool chan status.OrderWorkerToPool
+	ChanInfo         chan Info
 	RegisterWorker   chan *Worker
 	Jobs             chan *job.Job
-	Results          chan result.Result
-	Errors           chan rorre.Error
+	Results          chan *result.Result
+	Errors           chan *rorre.Error
+	tickTime         time.Duration
 	Ticker           *time.Ticker
-	Close            chan struct{}
-	WorkerStatus
+	CloseOrder       chan struct{}
+	CloseJob         chan struct{}
+	CloseTick        chan struct{}
+	Info
 }
 
 func (w *Worker) String() string {
-	return fmt.Sprintf("Worker> ID:%v, IdleTime:%v, MaxIdleTime:%v, ActiveTime:%v, Status:%v", w.ID, w.WorkerStatus.IdleTime, w.WorkerStatus.MaxIdleTime, w.WorkerStatus.ActiveTime, w.WorkerStatus.Status)
+	return fmt.Sprintf("Worker> ID:%v, IdleTime:%v, MaxIdleTime:%v, ActiveTime:%v, Status:%v", w.ID, w.Info.IdleTime, w.Info.MaxIdleTime, w.Info.ActiveTime, w.Info.Status)
 }
 
-func NewWorker(r chan *Worker, j chan *job.Job, re chan result.Result, e chan rorre.Error) *Worker {
+// NewWorker creates a new worker
+func NewWorker(r chan *Worker, j chan *job.Job, re chan *result.Result, e chan *rorre.Error, tickTime time.Duration) *Worker {
 	id := uuid.New()
 	return &Worker{
 		ID:               id,
 		ChanPoolToWorker: make(chan status.OrderPoolToWorker),
-		ChanWorkerToPool: make(chan status.OrderWorkerToPoll),
-		ChanStatus:       make(chan WorkerStatus),
+		ChanWorkerToPool: make(chan status.OrderWorkerToPool),
+		ChanInfo:         make(chan Info),
+		CloseJob:         make(chan struct{}),
+		CloseOrder:       make(chan struct{}),
+		CloseTick:        make(chan struct{}),
 		RegisterWorker:   r,
 		Jobs:             j,
 		Results:          re,
 		Errors:           e,
-		Ticker:           time.NewTicker(time.Second),
-		WorkerStatus: WorkerStatus{
+		tickTime:         tickTime,
+		Ticker:           time.NewTicker(tickTime),
+		Info: Info{
 			ID:          id,
 			Status:      status.PENDING,
 			MaxIdleTime: 5 * time.Second,
@@ -65,61 +76,149 @@ func NewWorker(r chan *Worker, j chan *job.Job, re chan result.Result, e chan ro
 
 }
 
-// Register: Worker registers him self to pool
-func (w *Worker) Register(ch chan *Worker) {
-	ch <- w
+// Register : Worker registers him self to pool
+func (w *Worker) Register() {
+	w.RegisterWorker <- w
 }
 
-func (w *Worker) Run() {
-	log.WithFields(log.Fields{"worker": w}).Info("start")
-	w.Register(w.RegisterWorker)
+// stopJobs private method
+func (w *Worker) stopJobs() {
+	close(w.Jobs)
+	w.CloseJob <- struct{}{}
+}
 
-	// ORDER LOOP
-	go func() {
-		for order := range w.ChanPoolToWorker {
-			if order == status.PW_STOP && w.Status == status.PENDING {
+// stopTicker private method
+func (w *Worker) stopTicker() {
+	w.Ticker.Stop()
+	w.CloseTick <- struct{}{}
+}
+
+// stopOrders private method
+func (w *Worker) stopOrders() {
+	close(w.ChanPoolToWorker)
+	w.CloseOrder <- struct{}{}
+}
+
+// Stop send close signal to all channels and close it
+func (w *Worker) Stop() {
+	log.Println("Worker send stop to job")
+	w.stopJobs()
+	log.Println("Worker send stop to order")
+	w.stopOrders()
+	log.Println("Worker send stop to tick")
+	w.stopTicker()
+}
+
+// startOrderLoop private method
+func (w *Worker) startOrderLoop() error {
+	defer func() {
+		log.Debugf("worker ID:%v job's loop end", w.ID)
+	}()
+LOOP:
+	for {
+		select {
+		case order := <-w.ChanPoolToWorker:
+			switch order {
+			case status.PW_STOP:
 				w.Status = status.STOPPED
-				log.WithFields(log.Fields{"worker": w}).Warn("stop")
-				w.ChanWorkerToPool <- status.WP_CONFIRM
-				close(w.ChanPoolToWorker)
-				close(w.ChanWorkerToPool)
-				w.Ticker.Stop()
-				w.Close <- struct{}{}
-
-			} else if order == status.PW_STATUS {
-				log.Printf("worker ID:%v recieved request of status from pool\n", w.ID)
-				w.ChanStatus <- w.WorkerStatus
-				log.Printf("worker ID:%v send status to pool\n", w.ID)
+				log.Infof("Worker ID: %v stopping...\n", w.ID)
+				go w.Stop()
+			case status.PW_INFO:
+				log.Debugf("worker ID:%v recieved request of status from pool\n", w.ID)
+				w.ChanInfo <- w.Info
+				log.Debugf("worker ID:%v send status to pool\n", w.ID)
 			}
-		}
-	}()
+		case <-w.CloseOrder:
+			break LOOP
 
-	// JOB LOOP
-	go func() {
-		for job := range w.Jobs {
-			log.Println("RECIEVED JOB")
-			w.Status = status.RUNNING
-			w.IdleTime = 0
-			job.Run()
-			w.Status = status.PENDING
 		}
-	}()
+	}
 
-	// TICKER LOOP
-	go func() {
-		for _ = range w.Ticker.C {
-			if w.Status == status.PENDING {
-				w.IdleTime += time.Second
-			}
-			if w.IdleTime > w.MaxIdleTime {
-				log.WithFields(log.Fields{"worker": w}).Warn("stop idletime > maxidletime")
-				w.ChanWorkerToPool <- status.WP_STOP
+	log.Debug("Waiting for order loop to close...")
+	return nil
+}
+
+// startJobLoop private method
+func (w *Worker) startJobLoop() error {
+	defer func() {
+		log.Debug("Job loop closed")
+	}()
+LOOP:
+	for {
+		select {
+		case job := <-w.Jobs:
+			log.Debugf("Worker ID: %v recieved job: %v", w.ID, job)
+			w.Status, w.IdleTime = status.RUNNING, 0
+			result, err := job.Run()
+			if err != nil {
+				w.Errors <- err
 			} else {
-				log.WithFields(log.Fields{"worker": w}).Warn("tick")
+				w.Results <- result
 			}
+			w.Status = status.PENDING
+		case <-w.CloseJob:
+			log.Debug("Waiting for job loop to close...")
+			break LOOP
 		}
+	}
+	return nil
+}
+
+// startTickerLoop private method
+func (w *Worker) startTickerLoop() error {
+	defer func() {
+		log.Println("Tick loop ended")
 	}()
+	askToStop := false
+LOOP:
+	for {
+		select {
+		case <-w.Ticker.C:
+			if w.Status == status.PENDING {
+				w.IdleTime += w.tickTime
+			}
+			if w.IdleTime > w.MaxIdleTime && !askToStop {
+				log.Warnf("Worker ID: %v will stop because idletime > maxidletime\n", w.ID)
+				w.ChanWorkerToPool <- status.WP_STOP // worker asks the pool to stop
+				askToStop = true
+			} else {
+				log.Debugf("Worker ID: %v tick\n", w.ID)
+			}
+		case <-w.CloseTick:
+			log.Debug("Waiting for tick loop to close...")
+			break LOOP
+		}
+	}
+	return nil
+}
 
-	log.Println("END OF WORKER")
-
+// Run method to run a worker
+func (w *Worker) Run() error {
+	defer func() {
+		log.Debugf("Worker ID: %v run's ended\n", w.ID)
+	}()
+	log.Debugf("Worker ID: %v started\n", w.ID)
+	go func() {
+		w.Register()
+	}()
+	// TODO Wait for confirmation of registration
+	if order := <-w.ChanPoolToWorker; order != status.PW_CONFIRM {
+		return fmt.Errorf("Pool should have confirmed registration of worker ID: %v", w.ID)
+	}
+	wg := sync.WaitGroup{}
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		w.startOrderLoop()
+	}()
+	go func() {
+		defer wg.Done()
+		w.startJobLoop()
+	}()
+	go func() {
+		defer wg.Done()
+		w.startTickerLoop()
+	}()
+	wg.Wait()
+	return nil
 }

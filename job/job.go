@@ -13,33 +13,34 @@ type function = func(args ...interface{}) (interface{}, error)
 
 // Job struct
 type Job struct {
-	Name    string               // Name of the job
-	ID      uuid.UUID            // ID of the job
-	F       function             // function that produces an interface and an error
-	Results chan<- result.Result // chan of results
-	Errors  chan<- rorre.Error   // chan of errors
-	Args    []interface{}        //arguments
+	Name string        // Name of the job
+	ID   uuid.UUID     // ID of the job
+	F    function      // function that produces an interface and an error
+	Args []interface{} //arguments
 }
 
+// String method
 func (j Job) String() string {
 	return fmt.Sprintf("Job>ID: %v, Name: %v", j.ID, j.Name)
 }
 
 // NewJob creates a new job
-func NewJob(f function, name string, r chan<- result.Result, e chan<- rorre.Error, args ...interface{}) *Job {
-	return &Job{F: f, ID: uuid.New(), Name: name, Results: r, Errors: e, Args: args}
+func NewJob(f function, name string, args ...interface{}) *Job {
+	return &Job{F: f, ID: uuid.New(), Name: name}
 }
 
 // Run runs the job
-func (j *Job) Run() {
+func (j *Job) Run() (*result.Result, *rorre.Error) {
 	t := time.Now()
-	if value, err := j.F(j.Args...); err != nil {
-		j.Errors <- rorre.Error{ID: j.ID, Err: err}
-	} else {
-		j.Results <- result.Result{ID: j.ID, Duration: time.Since(t), Value: value}
+	value, err := j.F(j.Args...)
+	if err != nil {
+		return nil, &rorre.Error{ID: j.ID, Err: err}
+
 	}
+	return &result.Result{ID: j.ID, Duration: time.Since(t), Value: value}, nil
 }
 
+// Add function example
 func Add(ints ...interface{}) (interface{}, error) {
 	time.Sleep(3 * time.Second)
 	if len(ints) == 2 {

@@ -6,7 +6,7 @@ import (
 )
 
 func TestPool(t *testing.T) {
-	p := NewPool(5, 10)
+	p := NewPool(100, 100)
 	if p == nil {
 		t.Error("could not init pool")
 	}

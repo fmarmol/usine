@@ -5,6 +5,6 @@ import "github.com/sirupsen/logrus"
 // NewLogger is a default logger
 func NewLogger() *logrus.Logger {
 	log := logrus.New()
-	log.SetLevel(logrus.DebugLevel)
+	log.SetLevel(logrus.InfoLevel)
 	return log
 }

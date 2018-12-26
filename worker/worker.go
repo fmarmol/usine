@@ -8,7 +8,6 @@ import (
 	"github.com/fmarmol/usine/job"
 	"github.com/fmarmol/usine/logger"
 	"github.com/fmarmol/usine/result"
-	"github.com/fmarmol/usine/rorre"
 	"github.com/fmarmol/usine/status"
 	"github.com/google/uuid"
 )
@@ -22,6 +21,7 @@ type Info struct {
 	MaxIdleTime time.Duration
 	ActiveTime  time.Duration
 	Status      status.Status
+	sync.Mutex
 }
 
 func (ws Info) String() string {
@@ -35,9 +35,9 @@ type Worker struct {
 	ChanWorkerToPool chan status.OrderWorkerToPool
 	ChanInfo         chan Info
 	RegisterWorker   chan *Worker
-	Jobs             chan *job.Job
+	Jobs             chan job.Runable
 	Results          chan *result.Result
-	Errors           chan *rorre.Error
+	Errors           chan error
 	tickTime         time.Duration
 	Ticker           *time.Ticker
 	CloseOrder       chan struct{}
@@ -46,12 +46,42 @@ type Worker struct {
 	Info
 }
 
+// GetStatus returns status thread safe
+func (w *Worker) GetStatus() status.Status {
+	w.Lock()
+	s := w.Status
+	w.Unlock()
+	return s
+}
+
+// SetStatus set status thread safe
+func (w *Worker) SetStatus(s status.Status) {
+	w.Lock()
+	w.Status = s
+	w.Unlock()
+}
+
+// GetIdleTime returns idle time thread safe
+func (w *Worker) GetIdleTime() time.Duration {
+	w.Lock()
+	d := w.IdleTime
+	w.Unlock()
+	return d
+}
+
+// SetIdleTime sets idle time thread safe
+func (w *Worker) SetIdleTime(d time.Duration) {
+	w.Lock()
+	w.IdleTime = d
+	w.Unlock()
+}
+
 func (w *Worker) String() string {
 	return fmt.Sprintf("Worker> ID:%v, IdleTime:%v, MaxIdleTime:%v, ActiveTime:%v, Status:%v", w.ID, w.Info.IdleTime, w.Info.MaxIdleTime, w.Info.ActiveTime, w.Info.Status)
 }
 
-// NewWorker creates a new worker
-func NewWorker(r chan *Worker, j chan *job.Job, re chan *result.Result, e chan *rorre.Error, tickTime time.Duration) *Worker {
+// New creates a new worker
+func New(r chan *Worker, j chan job.Runable, re chan *result.Result, e chan error, tickTime time.Duration) *Worker {
 	id := uuid.New()
 	return &Worker{
 		ID:               id,
@@ -77,13 +107,16 @@ func NewWorker(r chan *Worker, j chan *job.Job, re chan *result.Result, e chan *
 }
 
 // Register : Worker registers him self to pool
-func (w *Worker) Register() {
+func (w *Worker) Register() error {
 	w.RegisterWorker <- w
+	if order := <-w.ChanPoolToWorker; order != status.PW_CONFIRM {
+		return fmt.Errorf("Pool should have confirmed registration of worker ID: %v", w.ID)
+	}
+	return nil
 }
 
 // stopJobs private method
 func (w *Worker) stopJobs() {
-	close(w.Jobs)
 	w.CloseJob <- struct{}{}
 }
 
@@ -101,18 +134,18 @@ func (w *Worker) stopOrders() {
 
 // Stop send close signal to all channels and close it
 func (w *Worker) Stop() {
-	log.Println("Worker send stop to job")
+	log.Debugln("Worker send stop to job")
 	w.stopJobs()
-	log.Println("Worker send stop to order")
+	log.Debugln("Worker send stop to order")
 	w.stopOrders()
-	log.Println("Worker send stop to tick")
+	log.Debugln("Worker send stop to tick")
 	w.stopTicker()
 }
 
 // startOrderLoop private method
 func (w *Worker) startOrderLoop() error {
 	defer func() {
-		log.Debugf("worker ID:%v job's loop end", w.ID)
+		log.Debugf("worker ID:%v job's loop end\n", w.ID)
 	}()
 LOOP:
 	for {
@@ -124,9 +157,9 @@ LOOP:
 				log.Infof("Worker ID: %v stopping...\n", w.ID)
 				go w.Stop()
 			case status.PW_INFO:
-				log.Debugf("worker ID:%v recieved request of status from pool\n", w.ID)
+				log.Debugf("Worker ID:%v recieved request of status from pool\n", w.ID)
 				w.ChanInfo <- w.Info
-				log.Debugf("worker ID:%v send status to pool\n", w.ID)
+				log.Debugf("Worker ID:%v send status to pool\n", w.ID)
 			}
 		case <-w.CloseOrder:
 			break LOOP
@@ -134,7 +167,7 @@ LOOP:
 		}
 	}
 
-	log.Debug("Waiting for order loop to close...")
+	log.Debugln("Waiting for order loop to close...")
 	return nil
 }
 
@@ -146,18 +179,21 @@ func (w *Worker) startJobLoop() error {
 LOOP:
 	for {
 		select {
-		case job := <-w.Jobs:
-			log.Debugf("Worker ID: %v recieved job: %v", w.ID, job)
-			w.Status, w.IdleTime = status.RUNNING, 0
-			result, err := job.Run()
-			if err != nil {
-				w.Errors <- err
-			} else {
-				w.Results <- result
+		case job, ok := <-w.Jobs:
+			if ok && w.GetStatus() == status.PENDING {
+				log.Debugf("Worker ID: %v recieved job: %v, %v", w.ID, job, ok)
+				w.SetStatus(status.RUNNING)
+				w.SetIdleTime(0)
+				result, err := job.Run()
+				if err != nil {
+					w.Errors <- err
+				} else {
+					w.Results <- result
+				}
+				w.SetStatus(status.PENDING)
 			}
-			w.Status = status.PENDING
 		case <-w.CloseJob:
-			log.Debug("Waiting for job loop to close...")
+			log.Debugln("Waiting for job loop to close...")
 			break LOOP
 		}
 	}
@@ -167,25 +203,25 @@ LOOP:
 // startTickerLoop private method
 func (w *Worker) startTickerLoop() error {
 	defer func() {
-		log.Println("Tick loop ended")
+		log.Debugln("Tick loop ended")
 	}()
 	askToStop := false
 LOOP:
 	for {
 		select {
 		case <-w.Ticker.C:
-			if w.Status == status.PENDING {
-				w.IdleTime += w.tickTime
+			if w.GetStatus() == status.PENDING {
+				w.SetIdleTime(w.GetIdleTime() + w.tickTime)
 			}
 			if w.IdleTime > w.MaxIdleTime && !askToStop {
 				log.Warnf("Worker ID: %v will stop because idletime > maxidletime\n", w.ID)
 				w.ChanWorkerToPool <- status.WP_STOP // worker asks the pool to stop
 				askToStop = true
 			} else {
-				log.Debugf("Worker ID: %v tick\n", w.ID)
+				fmt.Println("tick")
 			}
 		case <-w.CloseTick:
-			log.Debug("Waiting for tick loop to close...")
+			log.Debugln("Waiting for tick loop to close...")
 			break LOOP
 		}
 	}
@@ -193,18 +229,15 @@ LOOP:
 }
 
 // Run method to run a worker
-func (w *Worker) Run() error {
+func (w *Worker) Run() (err error) {
 	defer func() {
 		log.Debugf("Worker ID: %v run's ended\n", w.ID)
 	}()
 	log.Debugf("Worker ID: %v started\n", w.ID)
-	go func() {
-		w.Register()
-	}()
-	// TODO Wait for confirmation of registration
-	if order := <-w.ChanPoolToWorker; order != status.PW_CONFIRM {
-		return fmt.Errorf("Pool should have confirmed registration of worker ID: %v", w.ID)
+	if err := w.Register(); err != nil {
+		return err
 	}
+	// TODO Wait for confirmation of registration
 	wg := sync.WaitGroup{}
 	wg.Add(3)
 	go func() {

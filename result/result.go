@@ -14,6 +14,6 @@ type Result struct {
 	Value    interface{}
 }
 
-func (r Result) String() string {
+func (r *Result) String() string {
 	return fmt.Sprintf("Result>ID: %v, Duration: %v, Value: %v", r.ID, r.Duration, r.Value)
 }

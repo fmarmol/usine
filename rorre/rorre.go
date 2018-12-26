@@ -12,6 +12,10 @@ type Error struct {
 	Err error
 }
 
-func (e Error) String() string {
+func (e *Error) String() string {
 	return fmt.Sprintf("Error>ID: %v, Error: %v", e.ID, e.Err)
+}
+
+func (e *Error) Error() string {
+	return e.String()
 }

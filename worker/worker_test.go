@@ -1,10 +1,10 @@
 package worker
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
-	"github.com/fmarmol/usine/rorre"
 	"github.com/fmarmol/usine/status"
 
 	"github.com/fmarmol/usine/job"
@@ -14,13 +14,35 @@ import (
 func TestWorker(t *testing.T) {
 
 	r := make(chan *Worker)
-	j := make(chan *job.Job)
+	j := make(chan job.Runable)
 	re := make(chan *result.Result)
-	e := make(chan *rorre.Error)
+	e := make(chan error)
 
-	worker := NewWorker(r, j, re, e, time.Second)
 	go func() {
+		for i := 0; i < 10; i++ {
+			j <- job.New(fmt.Sprintf("Add %v and %v", i, i+1), job.Add, i, i+1)
+			fmt.Println("job sent")
+		}
+	}()
+
+	worker := New(r, j, re, e, time.Second)
+	go func() {
+		fmt.Println("fetch register")
+		<-worker.RegisterWorker
 		worker.ChanPoolToWorker <- status.PW_CONFIRM
+		fmt.Println("confirm sent")
+	}()
+
+	go func() {
+		for r := range worker.Results {
+			fmt.Println(r)
+		}
+	}()
+
+	go func() {
+		for r := range worker.Errors {
+			fmt.Println(r)
+		}
 	}()
 
 	go func() {

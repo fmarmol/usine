@@ -11,6 +11,11 @@ import (
 
 type function = func(args ...interface{}) (interface{}, error)
 
+// Runable is an interface
+type Runable interface {
+	Run() (*result.Result, error)
+}
+
 // Job struct
 type Job struct {
 	Name string        // Name of the job
@@ -24,13 +29,13 @@ func (j Job) String() string {
 	return fmt.Sprintf("Job>ID: %v, Name: %v", j.ID, j.Name)
 }
 
-// NewJob creates a new job
-func NewJob(f function, name string, args ...interface{}) *Job {
-	return &Job{F: f, ID: uuid.New(), Name: name}
+// New creates a new job
+func New(name string, f function, args ...interface{}) *Job {
+	return &Job{F: f, ID: uuid.New(), Name: name, Args: args}
 }
 
 // Run runs the job
-func (j *Job) Run() (*result.Result, *rorre.Error) {
+func (j *Job) Run() (*result.Result, error) {
 	t := time.Now()
 	value, err := j.F(j.Args...)
 	if err != nil {
@@ -42,7 +47,7 @@ func (j *Job) Run() (*result.Result, *rorre.Error) {
 
 // Add function example
 func Add(ints ...interface{}) (interface{}, error) {
-	time.Sleep(3 * time.Second)
+	//time.Sleep(3 * time.Second)
 	if len(ints) == 2 {
 		return ints[0].(int) + ints[1].(int), nil
 	}

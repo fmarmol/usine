@@ -1,6 +1,7 @@
 package job
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -18,10 +19,11 @@ type Runable interface {
 
 // Job struct
 type Job struct {
-	Name string        // Name of the job
-	ID   uuid.UUID     // ID of the job
-	F    function      // function that produces an interface and an error
-	Args []interface{} //arguments
+	Name string          // Name of the job
+	ID   uuid.UUID       // ID of the job
+	F    function        // function that produces an interface and an error
+	Args []interface{}   //arguments
+	ctx  context.Context // context
 }
 
 // String method
@@ -30,8 +32,8 @@ func (j Job) String() string {
 }
 
 // New creates a new job
-func New(name string, f function, args ...interface{}) *Job {
-	return &Job{F: f, ID: uuid.New(), Name: name, Args: args}
+func New(ctx context.Context, name string, f function, args ...interface{}) *Job {
+	return &Job{F: f, ID: uuid.New(), Name: name, Args: args, ctx: ctx}
 }
 
 // Run runs the job
@@ -48,8 +50,8 @@ func (j *Job) Run() (*result.Result, error) {
 // Add function example
 func Add(ints ...interface{}) (interface{}, error) {
 	//time.Sleep(3 * time.Second)
-	if len(ints) == 2 {
-		return ints[0].(int) + ints[1].(int), nil
+	if len(ints) != 2 {
+		return nil, fmt.Errorf("Add function has only 2 arguments")
 	}
-	return nil, fmt.Errorf("add function should take only 2 arguments")
+	return ints[0].(int) + ints[1].(int), nil
 }

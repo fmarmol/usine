@@ -26,36 +26,26 @@ func TestWorker(t *testing.T) {
 	}()
 
 	worker := New(r, j, re, e, time.Second)
+
+	// fake pool that auto confirm any request
 	go func() {
-		fmt.Println("fetch register")
-		<-worker.RegisterWorker
 		worker.ChanPoolToWorker <- status.PW_CONFIRM
-		fmt.Println("confirm sent")
 	}()
 
+	// go routine to see results
 	go func() {
 		for r := range worker.Results {
 			fmt.Println(r)
 		}
 	}()
 
+	// go routine to see errors
 	go func() {
 		for r := range worker.Errors {
 			fmt.Println(r)
 		}
 	}()
-
-	go func() {
-		select {
-		case order := <-worker.ChanWorkerToPool:
-			log.Printf("Worker says: %T, %+v\n", order, order)
-			switch order {
-			case status.WP_STOP:
-				log.Println("Pool repoonds to worker with:", status.PW_STOP)
-				worker.ChanPoolToWorker <- status.PW_STOP
-			}
-
-		}
-	}()
+	log.Println("worker run:")
 	worker.Run()
+
 }

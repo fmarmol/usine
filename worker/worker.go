@@ -172,32 +172,33 @@ LOOP:
 }
 
 // startJobLoop private method
-func (w *Worker) startJobLoop() error {
-	defer func() {
-		log.Debug("Job loop closed")
-	}()
-LOOP:
-	for {
-		select {
-		case job, ok := <-w.Jobs:
-			if ok && w.GetStatus() == status.PENDING {
-				log.Debugf("Worker ID: %v recieved job: %v, %v", w.ID, job, ok)
+func (w *Worker) startJobLoop(jobs <-chan job.Runable) (<-chan *result.Result, <-chan error) {
+	results := make(chan *result.Result)
+	errors := make(chan error)
+
+	go func() {
+	LOOP:
+		for {
+			select {
+			case job, ok := <-jobs:
+				if !ok {
+					break LOOP
+				}
 				w.SetStatus(status.RUNNING)
 				w.SetIdleTime(0)
-				result, err := job.Run()
+				res, err := job.Run()
 				if err != nil {
-					w.Errors <- err
+					errors <- err
 				} else {
-					w.Results <- result
+					results <- res
 				}
-				w.SetStatus(status.PENDING)
+			case <-w.CloseJob:
+				log.Debugln("Waiting for job loop to close...")
+				break LOOP
 			}
-		case <-w.CloseJob:
-			log.Debugln("Waiting for job loop to close...")
-			break LOOP
 		}
-	}
-	return nil
+	}()
+	return results, errors
 }
 
 // startTickerLoop private method
@@ -229,13 +230,13 @@ LOOP:
 }
 
 // Run method to run a worker
-func (w *Worker) Run() (err error) {
+func (w *Worker) Run() (<-chan *result.Result, <-chan error, error) {
 	defer func() {
 		log.Debugf("Worker ID: %v run's ended\n", w.ID)
 	}()
 	log.Debugf("Worker ID: %v started\n", w.ID)
 	if err := w.Register(); err != nil {
-		return err
+		return nil, nil, err
 	}
 	// TODO Wait for confirmation of registration
 	wg := sync.WaitGroup{}
